@@ -1,0 +1,85 @@
+#!/usr/bin/python
+#
+# This is a simple Gerrit hook for updating Trac with information about what
+# changes are in Gerrit review.
+#
+# It parses the commit messages from Gerrit and looks for a Trac ticket in the 
+# style of "#1000".
+#
+# It then adds a informative message to the Trac ticket about the review URL
+# and other data. It can also change the status of the issue to indicate that
+# this issue is now under gerrit review.
+#
+# Script is tested with Trac 0.1.2 and Gerrit 2.6.rc0
+
+# set the auth url
+TRAC_URL = "http://gerrit:123456@127.0.0.1/projects/trac/login/rpc"
+
+# the regex we use for findig the issue id
+TRAC_ISSUE_ID_REGEX = '\#(\d+)'
+
+# which projects to run the script for
+GERRIT_PROJECTS = ["test", ]
+
+import optparse
+import sys
+import re
+import xmlrpclib
+
+python27 = True
+try:
+    from subprocess import check_output
+except Exception as e:
+    python27 = False
+    import subprocess
+
+
+if __name__ == '__main__':
+    parser = optparse.OptionParser()
+    parser.add_option('-c', '--change', dest='changeid')
+    parser.add_option('-u', '--change-url', dest='changeurl')
+    parser.add_option('-p', '--project', dest='project')
+    parser.add_option('-b', '--branch', dest='branch')
+    parser.add_option('-s', '--uploader', dest='uploader')
+    parser.add_option('-o', '--commit', dest='commit')
+    parser.add_option('-a', '--patchset', dest='patchset')
+    parser.add_option('-d', '--is-draft', dest='boolean')
+    parser.add_option('-t', '--topic', dest='topic')
+
+    (options, x) = parser.parse_args(sys.argv)
+
+    if options.project not in GERRIT_PROJECTS:
+        print "wrong project %s" % options.project
+        sys.exit(0)
+
+    if python27:
+        commitmsg = check_output(['/usr/local/bin/git','cat-file','-p', options.commit])
+    else:
+        commitmsg = subprocess.Popen(['/usr/local/bin/git','cat-file','-p', options.commit],
+                                     stdout=subprocess.PIPE).communicate()[0]
+    if not commitmsg or len(commitmsg) < 10:
+        print "no commit msg!"
+        sys.exit(0)
+
+    regex = re.compile(TRAC_ISSUE_ID_REGEX, re.IGNORECASE)
+    mg = regex.search(commitmsg)
+    if not mg:
+        print "no ticket set here"
+        sys.exit(0)
+    tracid = int(mg.group(1))
+    if not tracid or tracid == 0:
+        print "no ticket set here"
+        sys.exit(0)
+
+    traccomment = "Gerrit received patchset '%s' for Ticket #%d.\n" % \
+            (options.patchset, tracid)
+    traccomment += "Uploader: %s\n" % options.uploader
+    traccomment += "Change-Id: %s\n" % options.changeid
+    traccomment += "Gerrit URL: %s\n" % options.changeurl
+
+    server = xmlrpclib.ServerProxy(TRAC_URL)
+
+    ticket = {'status': 'accepted', 'owner': options.uploader}
+    server.ticket.update(tracid, traccomment, ticket)
+
+    sys.exit(0)
